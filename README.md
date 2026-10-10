@@ -1,5 +1,5 @@
 <p align="center">
-  <img src=".github/assets/banner.svg" alt="nimo MCP server: ask your AI if your site is up and fast" width="100%">
+  <img src=".github/assets/banner.jpg" alt="Hear it from nimo, not your customers. nimo pops out of a phone with a notification: your pricing page got 2 s slower, here's the fix." width="100%">
 </p>
 
 <p align="center">
@@ -8,6 +8,10 @@
 </p>
 
 # nimo MCP server: website uptime, speed and cron job monitoring for Claude, ChatGPT and Cursor
+
+**Hear it from nimo, not your customers.** When a page gets slow, checkout
+breaks or a backup doesn't run, nimo tells you first, in plain words, with the
+fix.
 
 Ask your AI assistant "is my site up?", "why did my homepage get slower?" or
 "did last night's backup run?" and get an answer from real checks, not a guess.
