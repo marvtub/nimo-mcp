@@ -2,7 +2,7 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.marvtub/nimo",
   "title": "nimo",
-  "description": "Website monitoring: uptime alerts, page speed and Core Web Vitals with the next fix, cron check-ins.",
+  "description": "Hear it from nimo, not your customers. Monitoring that tells you the fix, not just the alert: uptime, Core Web Vitals, cron check-ins, plus Journey Watch for your signup and checkout flows. Free one-off checks, no account needed.",
   "repository": { "url": "https://github.com/marvtub/nimo-mcp", "source": "github" },
   "version": "1.0.0",
   "websiteUrl": "https://heynimo.com/docs/mcp",

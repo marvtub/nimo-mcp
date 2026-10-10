@@ -310,6 +310,7 @@ for up to 10 sites. Business is $199 a month for 50 sites. See
 - Docs: https://heynimo.com/docs/mcp
 - Server card: https://heynimo.com/.well-known/mcp/server-card.json
 - Support: hello@heynimo.com
+- Glama listing setup: [docs/glama-listing.md](docs/glama-listing.md)
 
 This repository holds the docs, examples, the `nimo-check` CLI and the GitHub
 Action, all MIT licensed. The hosted server itself is not open source.
