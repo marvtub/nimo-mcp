@@ -1,11 +1,11 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
-  "name": "io.github.marvtub/nimo-mcp",
+  "name": "io.github.marvtub/nimo",
   "title": "nimo",
-  "description": "Website uptime, speed (Core Web Vitals) and cron job monitoring with Slack and Telegram alerts.",
+  "description": "Website monitoring: uptime alerts, page speed and Core Web Vitals with the next fix, cron check-ins.",
+  "repository": { "url": "https://github.com/marvtub/nimo-mcp", "source": "github" },
   "version": "1.0.0",
   "websiteUrl": "https://heynimo.com/docs/mcp",
-  "repository": { "url": "https://github.com/marvtub/nimo-mcp", "source": "github" },
   "remotes": [
     { "type": "streamable-http", "url": "https://api.heynimo.com/mcp-server" }
   ]
