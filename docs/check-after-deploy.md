@@ -20,7 +20,10 @@ The assistant will typically:
 
 ## Make it a habit
 
-Add this to your project's `CLAUDE.md` or `AGENTS.md`:
+Install the [Claude skill](../skills/check-site-after-deploy/SKILL.md), or add
+the [GitHub Action](../examples/github-actions/check-after-deploy.yml) so every
+deploy gets checked without asking. Or add this to your project's `CLAUDE.md`
+or `AGENTS.md`:
 
 ```markdown
 After a production deploy, use the nimo MCP server: check uptime, run an audit

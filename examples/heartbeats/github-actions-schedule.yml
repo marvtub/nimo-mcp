@@ -1,0 +1,17 @@
+# A scheduled GitHub Actions job that pings nimo when it succeeds.
+# Store the ping URL as a repository secret named NIMO_PING_URL.
+name: Nightly export
+
+on:
+  schedule:
+    - cron: "0 3 * * *"
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: ./scripts/export.sh
+      # Runs only if every step above succeeded.
+      - name: Tell nimo the job ran
+        run: curl -fsS -m 10 --retry 3 "${{ secrets.NIMO_PING_URL }}" > /dev/null

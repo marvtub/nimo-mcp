@@ -1,0 +1,44 @@
+name: nimo site check
+description: Check that a page loads and how fast it is (Core Web Vitals) after a deploy. Free, no account or key needed.
+author: nimo
+branding:
+  icon: activity
+  color: orange
+inputs:
+  url:
+    description: Public page to check, for example https://example.com
+    required: true
+  min-score:
+    description: Fail the step if the performance score (0-100) is below this. Leave empty to only report.
+    required: false
+    default: ""
+  timeout:
+    description: Seconds to wait for the result.
+    required: false
+    default: "240"
+outputs:
+  score:
+    description: Performance score, 0-100
+    value: ${{ steps.check.outputs.score }}
+  lcp-ms:
+    description: Largest Contentful Paint in milliseconds
+    value: ${{ steps.check.outputs.lcp-ms }}
+  cls:
+    description: Cumulative Layout Shift
+    value: ${{ steps.check.outputs.cls }}
+  ttfb-ms:
+    description: Time to first byte in milliseconds
+    value: ${{ steps.check.outputs.ttfb-ms }}
+runs:
+  using: composite
+  steps:
+    - id: check
+      shell: bash
+      env:
+        NIMO_URL: ${{ inputs.url }}
+        NIMO_MIN_SCORE: ${{ inputs.min-score }}
+        NIMO_TIMEOUT: ${{ inputs.timeout }}
+      run: |
+        args=("$NIMO_URL" --timeout "$NIMO_TIMEOUT")
+        if [ -n "$NIMO_MIN_SCORE" ]; then args+=(--min-score "$NIMO_MIN_SCORE"); fi
+        node "$GITHUB_ACTION_PATH/bin/nimo-check.mjs" "${args[@]}"

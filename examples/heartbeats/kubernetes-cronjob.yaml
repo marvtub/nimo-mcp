@@ -1,0 +1,25 @@
+# A Kubernetes CronJob that pings nimo when the job succeeds.
+# kubectl create secret generic nimo-ping --from-literal=url=https://api.heynimo.com/ping/<your-token>
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: nightly-report
+spec:
+  schedule: "0 3 * * *"
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: report
+              image: your-registry/report:latest
+              env:
+                - name: NIMO_PING_URL
+                  valueFrom:
+                    secretKeyRef: { name: nimo-ping, key: url }
+              command: ["/bin/sh", "-c"]
+              args:
+                - /app/run-report && curl -fsS -m 10 --retry 3 "$NIMO_PING_URL" > /dev/null

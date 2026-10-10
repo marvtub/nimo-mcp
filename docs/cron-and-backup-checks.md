@@ -30,9 +30,14 @@ Add the ping to the **end** of the command, joined with `&&`:
   which pings even when the job failed.
 - `curl -fsS` stays quiet on success and fails on an HTTP error.
 
-Other schedulers work the same way: a GitHub Actions step at the end of the
-workflow, the last line of a Kubernetes CronJob command, or a request at the
-end of a serverless function.
+Other schedulers work the same way. Copy-paste examples:
+
+- [crontab](../examples/heartbeats/crontab.txt)
+- [a nightly Postgres backup](../examples/heartbeats/postgres-backup.sh) that
+  also refuses to ping when the backup file is suspiciously small
+- [a scheduled GitHub Actions job](../examples/heartbeats/github-actions-schedule.yml)
+- [a Kubernetes CronJob](../examples/heartbeats/kubernetes-cronjob.yaml)
+- [a Node job or serverless cron](../examples/heartbeats/node-job.mjs)
 
 ## When you get an alert
 

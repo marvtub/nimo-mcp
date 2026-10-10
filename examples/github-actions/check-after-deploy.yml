@@ -1,0 +1,19 @@
+# Check the live site after each deploy to main. Copy to .github/workflows/.
+# The result (score, LCP, layout shift, server response and the fix to make
+# first) appears in the run's summary. Free, no account or secret needed.
+name: Check site after deploy
+
+on:
+  deployment_status:   # Vercel, Netlify and others report deploys this way
+  workflow_dispatch:
+
+jobs:
+  check:
+    if: github.event_name == 'workflow_dispatch' || github.event.deployment_status.state == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: marvtub/nimo-mcp@v1
+        with:
+          # The deployed URL when the host reports one, else your homepage.
+          url: ${{ github.event.deployment_status.environment_url || 'https://example.com' }}
+          min-score: 50   # fail the check if the page gets much slower

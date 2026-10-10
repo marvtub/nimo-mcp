@@ -1,0 +1,9 @@
+# Ping nimo only when the job succeeds (&&). If a ping doesn't arrive on time,
+# nimo alerts you in Slack or Telegram. Get the URL by asking your assistant
+# "watch my nightly backup", or with the add_check_in tool.
+
+# Nightly at 03:00
+0 3 * * * /usr/local/bin/backup.sh && curl -fsS -m 10 --retry 3 https://api.heynimo.com/ping/<your-token> > /dev/null
+
+# Every hour
+0 * * * * /usr/local/bin/sync-orders && curl -fsS -m 10 --retry 3 https://api.heynimo.com/ping/<your-token> > /dev/null
