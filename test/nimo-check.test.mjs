@@ -13,6 +13,7 @@ const cli = fileURLToPath(new URL("../bin/nimo-check.mjs", import.meta.url));
 
 let endpoint;
 let server;
+let slowResponseSent = false;
 const polls = new Map();
 
 function report(url, score = 92) {
@@ -66,8 +67,14 @@ before(async () => {
     req.setEncoding("utf8");
     req.on("data", (chunk) => { body += chunk; });
     req.on("end", () => {
-      res.writeHead(200, { "content-type": "application/json" });
-      res.end(JSON.stringify(responseFor(JSON.parse(body))));
+      const request = JSON.parse(body);
+      const sendResponse = () => {
+        if (request.params.arguments.url?.endsWith("/slow-request")) slowResponseSent = true;
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify(responseFor(request)));
+      };
+      if (request.params.arguments.url?.endsWith("/slow-request")) setTimeout(sendResponse, 300);
+      else sendResponse();
     });
   });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -174,4 +181,16 @@ test("enforces the requested timeout", async () => {
   assert.match(result.stderr, /no result after 0.05 seconds/);
   assert.ok(elapsed < 1_000, `timeout took ${elapsed}ms`);
   assert.equal(polls.get("timeout"), 0);
+});
+
+test("enforces the requested timeout while an HTTP request is pending", async () => {
+  slowResponseSent = false;
+  const started = Date.now();
+  const result = await run(["https://example.test/slow-request", "--timeout", "0.05", "--json"]);
+  const elapsed = Date.now() - started;
+  assert.equal(result.code, 2);
+  assert.equal(result.stdout, "");
+  assert.match(result.stderr, /no result after 0.05 seconds/);
+  assert.equal(slowResponseSent, false, "CLI waited for the delayed HTTP response");
+  assert.ok(elapsed < 1_000, `timeout took ${elapsed}ms`);
 });
