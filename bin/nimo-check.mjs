@@ -136,8 +136,10 @@ async function main() {
     const handle = { jobId: job.jobId, accessToken: job.accessToken };
     if (!opts.json) process.stderr.write("Checking");
     while (job.status === "queued" || job.status === "running") {
-      if (Date.now() > deadline) fail(`no result after ${opts.timeout} seconds`);
-      await sleep(POLL_MS);
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) fail(`no result after ${opts.timeout} seconds`);
+      await sleep(Math.min(POLL_MS, remaining));
+      if (Date.now() >= deadline) fail(`no result after ${opts.timeout} seconds`);
       if (!opts.json) process.stderr.write(".");
       job = await callTool("get_check", handle);
     }
