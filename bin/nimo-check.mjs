@@ -48,7 +48,20 @@ function fail(message, code = 2) {
 }
 
 let rpcId = 0;
+
+function parseSseMessages(body) {
+  return body.split(/\r?\n\r?\n/).flatMap((event) => {
+    const data = event.split(/\r?\n/)
+      .filter((line) => line.startsWith("data:"))
+      .map((line) => line.slice(5).replace(/^ /, ""))
+      .join("\n");
+    if (!data || data === "[DONE]") return [];
+    return [JSON.parse(data)];
+  });
+}
+
 async function callTool(name, args) {
+  const id = ++rpcId;
   const res = await fetch(ENDPOINT, {
     method: "POST",
     headers: {
@@ -56,12 +69,22 @@ async function callTool(name, args) {
       accept: "application/json, text/event-stream",
       "user-agent": "nimo-check (+https://github.com/marvtub/nimo-mcp)",
     },
-    body: JSON.stringify({ jsonrpc: "2.0", id: ++rpcId, method: "tools/call", params: { name, arguments: args } }),
+    body: JSON.stringify({ jsonrpc: "2.0", id, method: "tools/call", params: { name, arguments: args } }),
     signal: AbortSignal.timeout(30_000),
   });
   const body = await res.text();
   let message;
-  try { message = JSON.parse(body); } catch { throw new Error(`nimo answered with HTTP ${res.status}`); }
+  try {
+    if (res.headers.get("content-type")?.toLowerCase().includes("text/event-stream")) {
+      const messages = parseSseMessages(body);
+      message = messages.find((candidate) => candidate.id === id) ?? messages.at(-1);
+      if (!message) throw new Error("empty event stream");
+    } else {
+      message = JSON.parse(body);
+    }
+  } catch {
+    throw new Error(`nimo answered with HTTP ${res.status}`);
+  }
   if (res.status === 429 || message.error && !message.jsonrpc) throw new Error(message.error || "Too many requests. Try again later.");
   if (message.error) throw new Error(message.error.message || "The request failed.");
   const result = message.result;
