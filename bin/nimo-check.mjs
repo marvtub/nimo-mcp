@@ -38,7 +38,7 @@ function parseArgs(argv) {
   }
   if (!opts.url) fail("Give a page address, for example: nimo-check https://example.com");
   if (opts.minScore !== null && !(opts.minScore >= 0 && opts.minScore <= 100)) fail("--min-score must be between 0 and 100");
-  if (!(opts.timeout > 0)) fail("--timeout must be a positive number of seconds");
+  if (!Number.isFinite(opts.timeout) || !(opts.timeout > 0)) fail("--timeout must be a positive finite number of seconds");
   return opts;
 }
 
@@ -48,7 +48,9 @@ function fail(message, code = 2) {
 }
 
 let rpcId = 0;
-async function callTool(name, args) {
+async function callTool(name, args, deadline) {
+  const remaining = deadline - Date.now();
+  if (remaining <= 0) throw new Error("deadline exceeded");
   const res = await fetch(ENDPOINT, {
     method: "POST",
     headers: {
@@ -57,7 +59,7 @@ async function callTool(name, args) {
       "user-agent": "nimo-check (+https://github.com/marvtub/nimo-mcp)",
     },
     body: JSON.stringify({ jsonrpc: "2.0", id: ++rpcId, method: "tools/call", params: { name, arguments: args } }),
-    signal: AbortSignal.timeout(30_000),
+    signal: AbortSignal.timeout(Math.max(1, Math.ceil(Math.min(30_000, remaining)))),
   });
   const body = await res.text();
   let message;
@@ -128,21 +130,27 @@ function printText(r) {
 async function main() {
   const opts = parseArgs(process.argv.slice(2));
   const deadline = Date.now() + opts.timeout * 1000;
+  const timedOut = () => Date.now() >= deadline;
+  const failIfTimedOut = () => {
+    if (timedOut()) fail(`no result after ${opts.timeout} seconds`);
+  };
   let job;
   try {
-    job = await callTool("check_website", { url: opts.url });
+    job = await callTool("check_website", { url: opts.url }, deadline);
     // The access token only authorizes reading this one check. Keep it in
     // memory and out of logs, since CI logs on public repos are public.
     const handle = { jobId: job.jobId, accessToken: job.accessToken };
     if (!opts.json) process.stderr.write("Checking");
     while (job.status === "queued" || job.status === "running") {
-      if (Date.now() > deadline) fail(`no result after ${opts.timeout} seconds`);
-      await sleep(POLL_MS);
+      failIfTimedOut();
+      await sleep(Math.min(POLL_MS, Math.max(0, deadline - Date.now())));
+      failIfTimedOut();
       if (!opts.json) process.stderr.write(".");
-      job = await callTool("get_check", handle);
+      job = await callTool("get_check", handle, deadline);
     }
     if (!opts.json) process.stderr.write("\n");
   } catch (error) {
+    failIfTimedOut();
     fail(error.message);
   }
 
