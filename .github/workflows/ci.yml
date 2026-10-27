@@ -3,7 +3,27 @@ name: CI
 on:
   push:
     branches: [main]
+    paths:
+      - ".github/workflows/ci.yml"
+      - "action.yml"
+      - "bin/**"
+      - "examples/heartbeats/**"
+      - "package.json"
+      - "server.json"
+      - "test/**"
   pull_request:
+    paths:
+      - ".github/workflows/ci.yml"
+      - "action.yml"
+      - "bin/**"
+      - "examples/heartbeats/**"
+      - "package.json"
+      - "server.json"
+      - "test/**"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -27,5 +47,7 @@ jobs:
           node bin/nimo-check.mjs --help
           set +e; node bin/nimo-check.mjs; code=$?; set -e
           test "$code" = 2
+      - name: CLI end-to-end behavior
+        run: node --test test/nimo-check.test.mjs
       - name: server.json is valid JSON
         run: node -e 'JSON.parse(require("fs").readFileSync("server.json","utf8"))'
