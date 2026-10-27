@@ -56,6 +56,8 @@ test("CLI returns machine-readable results for completed and failed checks", asy
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   const { port } = server.address();
   const env = { ...process.env, NIMO_TRY_MCP_URL: `http://127.0.0.1:${port}` };
+  delete env.GITHUB_OUTPUT;
+  delete env.GITHUB_STEP_SUMMARY;
 
   try {
     const success = await execFileAsync(process.execPath, [cli, "https://example.com", "--json"], { env });
