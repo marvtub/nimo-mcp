@@ -91,6 +91,58 @@ function fixTitle(item) {
   return item?.title || item?.headline || item?.summary || item?.description || null;
 }
 
+function invalidResult(field) {
+  throw new Error(`nimo returned an invalid result (${field}).`);
+}
+
+function validateOptionalString(value, field) {
+  if (value === undefined || value === null) return;
+  if (typeof value !== "string") invalidResult(field);
+}
+
+function validateFinding(value, field) {
+  if (value === undefined || value === null) return;
+  if (typeof value !== "object" || Array.isArray(value)) invalidResult(field);
+  for (const key of ["title", "headline", "summary", "description"]) {
+    validateOptionalString(value[key], `${field}.${key}`);
+  }
+}
+
+function validateJob(job) {
+  if (!job || typeof job !== "object" || Array.isArray(job)) invalidResult("response");
+  if (!["queued", "running", "completed", "failed"].includes(job.status)) invalidResult("status");
+  validateOptionalString(job.jobId, "jobId");
+  validateOptionalString(job.accessToken, "accessToken");
+  validateOptionalString(job.url, "url");
+  validateOptionalString(job.device, "device");
+  validateOptionalString(job.measuredAt, "measuredAt");
+  validateOptionalString(job.error, "error");
+  if ((job.status === "queued" || job.status === "running") &&
+      (typeof job.jobId !== "string" || typeof job.accessToken !== "string")) {
+    invalidResult("polling credentials");
+  }
+
+  if (job.report !== undefined && job.report !== null) {
+    if (typeof job.report !== "object" || Array.isArray(job.report)) invalidResult("report");
+    validateOptionalString(job.report.summary, "report.summary");
+    validateFinding(job.report.primaryFinding, "report.primaryFinding");
+    if (job.report.recommendations !== undefined && job.report.recommendations !== null) {
+      if (!Array.isArray(job.report.recommendations)) invalidResult("report.recommendations");
+      job.report.recommendations.forEach((item, index) => validateFinding(item, `report.recommendations[${index}]`));
+    }
+    if (job.report.metrics !== undefined && job.report.metrics !== null) {
+      if (typeof job.report.metrics !== "object" || Array.isArray(job.report.metrics)) invalidResult("report.metrics");
+      for (const key of ["performanceScore", "lcp", "cls", "inp", "ttfb"]) {
+        const value = job.report.metrics[key];
+        if (value !== undefined && value !== null && (typeof value !== "number" || !Number.isFinite(value))) {
+          invalidResult(`report.metrics.${key}`);
+        }
+      }
+    }
+  }
+  return job;
+}
+
 function summarize(job) {
   const m = job.report?.metrics ?? {};
   const fixes = [fixTitle(job.report?.primaryFinding), ...(job.report?.recommendations ?? []).map(fixTitle)]
@@ -130,7 +182,7 @@ async function main() {
   const deadline = Date.now() + opts.timeout * 1000;
   let job;
   try {
-    job = await callTool("check_website", { url: opts.url });
+    job = validateJob(await callTool("check_website", { url: opts.url }));
     // The access token only authorizes reading this one check. Keep it in
     // memory and out of logs, since CI logs on public repos are public.
     const handle = { jobId: job.jobId, accessToken: job.accessToken };
@@ -139,7 +191,7 @@ async function main() {
       if (Date.now() > deadline) fail(`no result after ${opts.timeout} seconds`);
       await sleep(POLL_MS);
       if (!opts.json) process.stderr.write(".");
-      job = await callTool("get_check", handle);
+      job = validateJob(await callTool("get_check", handle));
     }
     if (!opts.json) process.stderr.write("\n");
   } catch (error) {
@@ -166,22 +218,35 @@ async function main() {
 function writeGithubOutputs(r) {
   if (process.env.GITHUB_OUTPUT) {
     appendFileSync(process.env.GITHUB_OUTPUT, [
-      `score=${r.score ?? ""}`, `lcp-ms=${r.lcpMs ?? ""}`, `cls=${r.cls ?? ""}`, `ttfb-ms=${r.ttfbMs ?? ""}`, "",
+      githubOutput("score", r.score), githubOutput("lcp-ms", r.lcpMs), githubOutput("cls", r.cls),
+      githubOutput("ttfb-ms", r.ttfbMs), "",
     ].join("\n"));
   }
   if (process.env.GITHUB_STEP_SUMMARY) {
     const row = (label, value, metric, raw) => `| ${label} | ${value} | ${grade(metric, raw)} |`;
     appendFileSync(process.env.GITHUB_STEP_SUMMARY, [
-      `### nimo check: ${r.url}`, "",
+      `### nimo check: ${escapeMarkdown(r.url)}`, "",
       "| Measure | Value | |", "| --- | --- | --- |",
       row("Performance score", r.score ?? "n/a", "score", r.score),
       row("Largest paint (LCP)", ms(r.lcpMs), "lcp", r.lcpMs),
       row("Layout shift (CLS)", r.cls ?? "n/a", "cls", r.cls),
       row("Server response (TTFB)", ms(r.ttfbMs), "ttfb", r.ttfbMs),
-      "", ...(r.fixes.length ? ["**Fix first**", "", ...r.fixes.map((f) => `- ${f}`), ""] : []),
+      "", ...(r.fixes.length ? ["**Fix first**", "", ...r.fixes.map((f) => `- ${escapeMarkdown(f)}`), ""] : []),
       "Checked with [nimo](https://heynimo.com).", "",
     ].join("\n"));
   }
+}
+
+function githubOutput(name, value) {
+  const serialized = value === null || value === undefined ? "" : String(value);
+  if (/[\r\n]/.test(serialized)) throw new Error(`Cannot write multiline GitHub output ${name}.`);
+  return `${name}=${serialized}`;
+}
+
+function escapeMarkdown(value) {
+  return String(value ?? "")
+    .replace(/[\u0000-\u001f\u007f]+/g, " ")
+    .replace(/([!"#$%&'()*+,\-./:;<=>?@[\\\]^_`{|}~])/g, "\\$1");
 }
 
 main();
