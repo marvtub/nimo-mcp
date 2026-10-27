@@ -48,7 +48,42 @@ function fail(message, code = 2) {
 }
 
 let rpcId = 0;
+
+function parseSseMessage(body, expectedId) {
+  let event = "";
+  let data = [];
+
+  const dispatch = () => {
+    if (data.length === 0) return null;
+    const currentEvent = event || "message";
+    const payload = data.join("\n");
+    event = "";
+    data = [];
+    if (currentEvent !== "message") return null;
+    const message = JSON.parse(payload);
+    return message?.id === expectedId ? message : null;
+  };
+
+  for (const line of body.replaceAll("\r\n", "\n").replaceAll("\r", "\n").split("\n")) {
+    if (line === "") {
+      const message = dispatch();
+      if (message) return message;
+      continue;
+    }
+    if (line.startsWith(":")) continue;
+    const colon = line.indexOf(":");
+    const field = colon === -1 ? line : line.slice(0, colon);
+    let value = colon === -1 ? "" : line.slice(colon + 1);
+    if (value.startsWith(" ")) value = value.slice(1);
+    if (field === "event") event = value;
+    else if (field === "data") data.push(value);
+  }
+
+  return dispatch();
+}
+
 async function callTool(name, args) {
+  const id = ++rpcId;
   const res = await fetch(ENDPOINT, {
     method: "POST",
     headers: {
@@ -56,12 +91,18 @@ async function callTool(name, args) {
       accept: "application/json, text/event-stream",
       "user-agent": "nimo-check (+https://github.com/marvtub/nimo-mcp)",
     },
-    body: JSON.stringify({ jsonrpc: "2.0", id: ++rpcId, method: "tools/call", params: { name, arguments: args } }),
+    body: JSON.stringify({ jsonrpc: "2.0", id, method: "tools/call", params: { name, arguments: args } }),
     signal: AbortSignal.timeout(30_000),
   });
   const body = await res.text();
   let message;
-  try { message = JSON.parse(body); } catch { throw new Error(`nimo answered with HTTP ${res.status}`); }
+  try {
+    const contentType = res.headers.get("content-type")?.split(";", 1)[0].trim().toLowerCase();
+    message = contentType === "text/event-stream" ? parseSseMessage(body, id) : JSON.parse(body);
+    if (!message) throw new Error("Missing response message");
+  } catch {
+    throw new Error(`nimo answered with HTTP ${res.status}`);
+  }
   if (res.status === 429 || message.error && !message.jsonrpc) throw new Error(message.error || "Too many requests. Try again later.");
   if (message.error) throw new Error(message.error.message || "The request failed.");
   const result = message.result;
