@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "description": "Check that a public page loads and how fast it is (Core Web Vitals) with nimo's free MCP server. No account needed.",
   "type": "module",
+  "scripts": { "test": "node --test" },
   "bin": { "nimo-check": "bin/nimo-check.mjs" },
   "files": ["bin"],
   "engines": { "node": ">=18" },
