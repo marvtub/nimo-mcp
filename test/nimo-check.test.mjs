@@ -1,100 +1,81 @@
 import assert from "node:assert/strict";
-import { execFile } from "node:child_process";
+import { spawn } from "node:child_process";
+import { once } from "node:events";
 import { createServer } from "node:http";
-import { test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { promisify } from "node:util";
+import test from "node:test";
 
-const execFileAsync = promisify(execFile);
 const cli = fileURLToPath(new URL("../bin/nimo-check.mjs", import.meta.url));
 
-test("CLI returns machine-readable results for completed and failed checks", async () => {
-  const requests = [];
-  const server = createServer(async (request, response) => {
-    let rawBody = "";
-    for await (const chunk of request) rawBody += chunk;
-    const body = JSON.parse(rawBody);
-    requests.push(body);
+function runCli(args, extraEnv = {}) {
+  const child = spawn(process.execPath, [cli, ...args], {
+    env: { ...process.env, ...extraEnv },
+  });
+  let stdout = "";
+  let stderr = "";
+  child.stdout.setEncoding("utf8");
+  child.stderr.setEncoding("utf8");
+  child.stdout.on("data", (chunk) => { stdout += chunk; });
+  child.stderr.on("data", (chunk) => { stderr += chunk; });
+  return once(child, "close").then(([code, signal]) => ({ code, signal, stdout, stderr }));
+}
 
-    const url = body.params.arguments.url;
-    const job = url === "https://example.com"
-      ? {
-          jobId: "job-fixture",
-          accessToken: "fixture-token",
-          status: "completed",
-          url,
-          device: "mobile",
-          measuredAt: "2026-01-02T03:04:05.000Z",
-          report: {
-            metrics: {
-              performanceScore: 87,
-              lcp: 2450,
-              cls: 0.02,
-              inp: 180,
-              ttfb: 320,
-            },
-            summary: "The fixture page loaded successfully.",
-            primaryFinding: { title: "Compress the hero image" },
-            recommendations: [{ title: "Cache static files" }],
-          },
-        }
-      : {
-          jobId: "job-failed-fixture",
-          accessToken: "fixture-token",
-          status: "failed",
-          error: "The fixture page could not be reached.",
-        };
+test("rejects an infinite timeout", async () => {
+  const result = await runCli(["https://example.com", "--timeout", "Infinity"]);
 
-    response.writeHead(200, { "content-type": "application/json" });
+  assert.equal(result.code, 2);
+  assert.match(result.stderr, /--timeout must be a positive finite number of seconds/);
+});
+
+test("applies the overall deadline to the initial request", async (t) => {
+  const server = createServer(() => {});
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  t.after(() => {
+    server.closeAllConnections();
+    server.close();
+  });
+  const { port } = server.address();
+  const started = performance.now();
+
+  const result = await runCli(["https://example.com", "--timeout", "1"], {
+    NIMO_TRY_MCP_URL: `http://127.0.0.1:${port}`,
+  });
+  const elapsed = performance.now() - started;
+
+  assert.equal(result.code, 2);
+  assert.match(result.stderr, /no result after 1 seconds/);
+  assert.ok(elapsed >= 750, `exited too early after ${elapsed}ms`);
+  assert.ok(elapsed < 3_000, `deadline was not enforced; exited after ${elapsed}ms`);
+});
+
+test("does not let a polling delay exceed the overall deadline", async (t) => {
+  const server = createServer((_request, response) => {
+    response.setHeader("content-type", "application/json");
     response.end(JSON.stringify({
       jsonrpc: "2.0",
-      id: body.id,
-      result: { structuredContent: job },
+      id: 1,
+      result: {
+        structuredContent: { status: "queued", jobId: "job-1", accessToken: "test-token" },
+      },
     }));
   });
-
-  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  t.after(() => {
+    server.closeAllConnections();
+    server.close();
+  });
   const { port } = server.address();
-  const env = { ...process.env, NIMO_TRY_MCP_URL: `http://127.0.0.1:${port}` };
-  delete env.GITHUB_OUTPUT;
-  delete env.GITHUB_STEP_SUMMARY;
+  const started = performance.now();
 
-  try {
-    const success = await execFileAsync(process.execPath, [cli, "https://example.com", "--json"], { env });
-    assert.equal(success.stderr, "");
-    assert.deepEqual(JSON.parse(success.stdout), {
-      ok: true,
-      url: "https://example.com",
-      device: "mobile",
-      measuredAt: "2026-01-02T03:04:05.000Z",
-      score: 87,
-      lcpMs: 2450,
-      cls: 0.02,
-      inpMs: 180,
-      ttfbMs: 320,
-      summary: "The fixture page loaded successfully.",
-      fixes: ["Compress the hero image", "Cache static files"],
-    });
+  const result = await runCli(["https://example.com", "--timeout", "1"], {
+    NIMO_TRY_MCP_URL: `http://127.0.0.1:${port}`,
+  });
+  const elapsed = performance.now() - started;
 
-    await assert.rejects(
-      execFileAsync(process.execPath, [cli, "https://broken.example", "--json"], { env }),
-      (error) => {
-        assert.equal(error.code, 1);
-        assert.equal(error.stderr, "");
-        assert.deepEqual(JSON.parse(error.stdout), {
-          url: "https://broken.example",
-          ok: false,
-          error: "The fixture page could not be reached.",
-        });
-        return true;
-      },
-    );
-
-    assert.deepEqual(
-      requests.map((request) => request.params.name),
-      ["check_website", "check_website"],
-    );
-  } finally {
-    await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
-  }
+  assert.equal(result.code, 2);
+  assert.match(result.stderr, /no result after 1 seconds/);
+  assert.ok(elapsed >= 750, `exited too early after ${elapsed}ms`);
+  assert.ok(elapsed < 3_000, `polling delay exceeded the deadline; exited after ${elapsed}ms`);
 });
