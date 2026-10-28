@@ -42,13 +42,54 @@ function parseArgs(argv) {
   return opts;
 }
 
+// Response handles authorize private checks. Never echo them, even if an
+// endpoint repeats them inside a report or an error message.
+const privateHandleValues = new Set();
+function rememberHandle(value) {
+  for (const key of ["jobId", "accessToken"]) {
+    if (typeof value?.[key] === "string" && value[key]) privateHandleValues.add(value[key]);
+  }
+}
+
+function redactHandles(value) {
+  let text = String(value ?? "");
+  for (const secret of [...privateHandleValues].sort((a, b) => b.length - a.length)) {
+    text = text.split(secret).join("[private check handle]");
+  }
+  return text;
+}
+
+const unicodeEscape = (value) => value.split("")
+  .map((unit) => `\\u${unit.charCodeAt(0).toString(16).padStart(4, "0")}`).join("");
+
+// Treat command introducers as unsafe anywhere, including JSON strings.
+// Encode the entire V2 (::) and legacy V1 (##[) introducers. The legacy runner
+// parser searches whole lines; prefixes and CR/LF removal are not a boundary.
+function escapeLogCommands(value) {
+  return value.replace(/::|##\[/g, unicodeEscape);
+}
+
+function logText(value) {
+  return escapeLogCommands(redactHandles(value)
+    .replace(/[\u0000-\u0009\u000b-\u001f\u007f-\u009f\p{Cf}\u2028\u2029]/gu, unicodeEscape));
+}
+
+function logJson(value) {
+  const json = JSON.stringify(value, (_key, item) => typeof item === "string" ? redactHandles(item) : item, 2);
+  // Both introducers can only occur inside string tokens in valid JSON.
+  // JSON Unicode escapes preserve parsed values; runner logs do not decode them.
+  return escapeLogCommands(json)
+    .replace(/[\u007f-\u009f\p{Cf}\u2028\u2029]/gu, unicodeEscape);
+}
+
 function fail(message, code = 2) {
-  process.stderr.write(`nimo-check: ${message}\n`);
+  process.stderr.write(`nimo-check: ${logText(message)}\n`);
   process.exit(code);
 }
 
 let rpcId = 0;
 async function callTool(name, args, deadline, timeoutSeconds) {
+  rememberHandle(args);
   const remaining = remainingTime(deadline, timeoutSeconds);
   const deadlineLimitsRequest = remaining <= 30_000;
   let res;
@@ -76,7 +117,12 @@ async function callTool(name, args, deadline, timeoutSeconds) {
   if (message.error) throw new Error(message.error.message || "The request failed.");
   const result = message.result;
   const text = result?.content?.find((c) => c.type === "text")?.text;
-  const data = result?.structuredContent ?? (text ? JSON.parse(text) : null);
+  let data = result?.structuredContent;
+  if (data == null && text) {
+    // Native JSON parse errors can include response snippets (and handles).
+    try { data = JSON.parse(text); } catch { throw new Error("nimo returned invalid tool JSON."); }
+  }
+  rememberHandle(data);
   if (result?.isError) throw new Error(data?.error || "The check could not run.");
   if (!data) throw new Error("nimo returned an empty result.");
   return data;
@@ -191,14 +237,14 @@ function summarize(job) {
 
 function printText(r) {
   const line = (label, value, g) => `  ${label.padEnd(25)}${String(value).padEnd(10)}${g}`;
-  console.log(`\nnimo check: ${r.url}${r.device ? ` (${r.device})` : ""}\n`);
+  console.log(`\nnimo check: ${logText(r.url)}${r.device ? ` (${logText(r.device)})` : ""}\n`);
   console.log(line("Performance score", r.score ?? "n/a", grade("score", r.score)));
   console.log(line("Largest paint (LCP)", ms(r.lcpMs), grade("lcp", r.lcpMs)));
   console.log(line("Layout shift (CLS)", r.cls ?? "n/a", grade("cls", r.cls)));
   if (r.inpMs !== null) console.log(line("Response to taps (INP)", ms(r.inpMs), grade("inp", r.inpMs)));
   console.log(line("Server response (TTFB)", ms(r.ttfbMs), grade("ttfb", r.ttfbMs)));
-  if (r.summary) console.log(`\n${r.summary}`);
-  if (r.fixes.length) console.log(`\nFix first:\n${r.fixes.map((f) => `  - ${f}`).join("\n")}`);
+  if (r.summary) console.log(`\n${logText(r.summary)}`);
+  if (r.fixes.length) console.log(`\nFix first:\n${r.fixes.map((f) => `  - ${logText(f)}`).join("\n")}`);
   console.log("\nWatch this page every 5 minutes with alerts in Slack or Telegram: https://heynimo.com\n");
 }
 
@@ -223,14 +269,14 @@ async function main() {
   }
 
   if (job.status === "failed") {
-    if (opts.json) console.log(JSON.stringify({ url: opts.url, ok: false, error: job.error }, null, 2));
-    else console.error(`\nThe page could not be checked: ${job.error}`);
+    if (opts.json) console.log(logJson({ url: opts.url, ok: false, error: job.error }));
+    else console.error(`\nThe page could not be checked: ${logText(job.error)}`);
     process.exit(1);
   }
 
   const result = summarize(job);
   const belowMin = opts.minScore !== null && (result.score === null || result.score < opts.minScore);
-  if (opts.json) console.log(JSON.stringify({ ok: !belowMin, ...result }, null, 2));
+  if (opts.json) console.log(logJson({ ok: !belowMin, ...result }));
   else printText(result);
   writeGithubOutputs(result);
   if (belowMin) {
@@ -268,9 +314,10 @@ function githubOutput(name, value) {
 }
 
 function escapeMarkdown(value) {
-  return String(value ?? "")
+  return redactHandles(value)
     .replace(/[\u0000-\u001f\u007f]+/g, " ")
     .replace(/([!"#$%&'()*+,\-./:;<=>?@[\\\]^_`{|}~])/g, "\\$1");
 }
 
-main();
+// Keep unexpected failures on the same safe log boundary, not a raw stack.
+main().catch((error) => fail(error.message));
