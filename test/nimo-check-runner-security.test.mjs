@@ -59,7 +59,7 @@ const shell = runBlocks[0][1].replace(/^ {8}/gm, "");
 const privateJob = "privateJobIdForSecurityTestOnly0123456789";
 const privateToken = "privateAccessTokenForSecurityTestOnly0123456789";
 const output = "score=90\nlcp-ms=1200\ncls=0.05\nttfb-ms=300\n";
-const rpc = (job) => ({ jsonrpc: "2.0", id: 1, result: { structuredContent: job } });
+const rpc = (job) => ({ jsonrpc: "2.0", result: { structuredContent: job } });
 const fixture = () => ({
   jobId: privateJob, accessToken: privateToken, status: "completed",
   url: "https://example.com/", device: "mobile", measuredAt: "2026-10-28T00:00:00Z",
@@ -85,7 +85,12 @@ async function runAction(response, { json = false, http = 200, raw, sequence } =
     for await (const chunk of request) body += chunk;
     requests.push(JSON.parse(body));
     reply.writeHead(http, { "content-type": "application/json" });
-    reply.end(raw ?? JSON.stringify(sequence ? sequence[Math.min(requests.length - 1, sequence.length - 1)] : response));
+    const envelope = sequence ? sequence[Math.min(requests.length - 1, sequence.length - 1)] : response;
+    // Match the actual request, including poll ID2; tool/error fixtures must
+    // reach the security boundary rather than fail transport validation first.
+    reply.end(raw ?? JSON.stringify(http === 200
+      ? { jsonrpc: "2.0", id: requests[requests.length - 1].id, ...envelope }
+      : envelope));
   });
   server.on("connection", (socket) => { sockets.add(socket); socket.on("close", () => sockets.delete(socket)); });
   try {
