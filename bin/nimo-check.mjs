@@ -228,8 +228,15 @@ function remainingTime(deadline, timeoutSeconds) {
 }
 
 async function waitToPoll(deadline, timeoutSeconds) {
-  await sleep(Math.min(POLL_MS, remainingTime(deadline, timeoutSeconds)));
-  remainingTime(deadline, timeoutSeconds);
+  const pollAt = Date.now() + POLL_MS;
+  while (true) {
+    const remaining = remainingTime(deadline, timeoutSeconds);
+    const untilPoll = pollAt - Date.now();
+    if (untilPoll <= 0) return;
+    // A timer can wake early. Recheck both absolute targets on every wake;
+    // a capped sleep finishing is not permission to start an early poll.
+    await sleep(Math.min(untilPoll, remaining));
+  }
 }
 
 function ms(value) {
