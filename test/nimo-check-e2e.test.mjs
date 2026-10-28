@@ -8,7 +8,7 @@ import { promisify } from "node:util";
 const execFileAsync = promisify(execFile);
 const cli = fileURLToPath(new URL("../bin/nimo-check.mjs", import.meta.url));
 
-test("CLI returns machine-readable results for completed and failed checks", async () => {
+test("CLI returns machine-readable results for completed and failed checks", { timeout: 12_000 }, async () => {
   const requests = [];
   const server = createServer(async (request, response) => {
     let rawBody = "";
@@ -19,8 +19,8 @@ test("CLI returns machine-readable results for completed and failed checks", asy
     const url = body.params.arguments.url;
     const job = url === "https://example.com"
       ? {
-          jobId: "job-fixture",
-          accessToken: "fixture-token",
+          jobId: "a".repeat(64),
+          accessToken: "b".repeat(64),
           status: "completed",
           url,
           device: "mobile",
@@ -39,8 +39,8 @@ test("CLI returns machine-readable results for completed and failed checks", asy
           },
         }
       : {
-          jobId: "job-failed-fixture",
-          accessToken: "fixture-token",
+          jobId: "c".repeat(64),
+          accessToken: "d".repeat(64),
           status: "failed",
           error: "The fixture page could not be reached.",
         };
@@ -55,12 +55,15 @@ test("CLI returns machine-readable results for completed and failed checks", asy
 
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   const { port } = server.address();
-  const env = { ...process.env, NIMO_TRY_MCP_URL: `http://127.0.0.1:${port}` };
-  delete env.GITHUB_OUTPUT;
-  delete env.GITHUB_STEP_SUMMARY;
+  const childOptions = {
+    env: { NIMO_TRY_MCP_URL: `http://127.0.0.1:${port}` },
+    timeout: 5_000,
+    killSignal: "SIGKILL",
+    maxBuffer: 256 * 1024,
+  };
 
   try {
-    const success = await execFileAsync(process.execPath, [cli, "https://example.com", "--json"], { env });
+    const success = await execFileAsync(process.execPath, [cli, "https://example.com", "--json"], childOptions);
     assert.equal(success.stderr, "");
     assert.deepEqual(JSON.parse(success.stdout), {
       ok: true,
@@ -77,7 +80,7 @@ test("CLI returns machine-readable results for completed and failed checks", asy
     });
 
     await assert.rejects(
-      execFileAsync(process.execPath, [cli, "https://broken.example", "--json"], { env }),
+      execFileAsync(process.execPath, [cli, "https://broken.example", "--json"], childOptions),
       (error) => {
         assert.equal(error.code, 1);
         assert.equal(error.stderr, "");
@@ -95,6 +98,7 @@ test("CLI returns machine-readable results for completed and failed checks", asy
       ["check_website", "check_website"],
     );
   } finally {
+    server.closeAllConnections();
     await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
   }
 });

@@ -9,7 +9,9 @@ const cli = fileURLToPath(new URL("../bin/nimo-check.mjs", import.meta.url));
 
 function runCli(args, extraEnv = {}) {
   const child = spawn(process.execPath, [cli, ...args], {
-    env: { ...process.env, ...extraEnv },
+    env: { NIMO_TRY_MCP_URL: "http://127.0.0.1:1", ...extraEnv },
+    timeout: 5_000,
+    killSignal: "SIGKILL",
   });
   let stdout = "";
   let stderr = "";
@@ -20,14 +22,14 @@ function runCli(args, extraEnv = {}) {
   return once(child, "close").then(([code, signal]) => ({ code, signal, stdout, stderr }));
 }
 
-test("rejects an infinite timeout", async () => {
+test("rejects an infinite timeout", { timeout: 8_000 }, async () => {
   const result = await runCli(["https://example.com", "--timeout", "Infinity"]);
 
   assert.equal(result.code, 2);
   assert.match(result.stderr, /--timeout must be a positive finite number of seconds/);
 });
 
-test("applies the overall deadline to the initial request", async (t) => {
+test("applies the overall deadline to the initial request", { timeout: 8_000 }, async (t) => {
   const server = createServer(() => {});
   server.listen(0, "127.0.0.1");
   await once(server, "listening");
@@ -49,14 +51,17 @@ test("applies the overall deadline to the initial request", async (t) => {
   assert.ok(elapsed < 3_000, `deadline was not enforced; exited after ${elapsed}ms`);
 });
 
-test("does not let a polling delay exceed the overall deadline", async (t) => {
-  const server = createServer((_request, response) => {
+test("does not let a polling delay exceed the overall deadline", { timeout: 8_000 }, async (t) => {
+  const server = createServer(async (request, response) => {
+    let raw = "";
+    for await (const chunk of request) raw += chunk;
+    const body = JSON.parse(raw);
     response.setHeader("content-type", "application/json");
     response.end(JSON.stringify({
       jsonrpc: "2.0",
-      id: 1,
+      id: body.id,
       result: {
-        structuredContent: { status: "queued", jobId: "job-1", accessToken: "test-token" },
+        structuredContent: { status: "queued", jobId: "a".repeat(64), accessToken: "b".repeat(64) },
       },
     }));
   });
