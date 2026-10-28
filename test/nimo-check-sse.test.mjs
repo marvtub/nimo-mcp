@@ -14,7 +14,9 @@ const testOptions = { timeout: 8_000 };
 
 async function runCli(contentType, responseBody) {
   const sockets = new Set();
+  const acceptHeaders = [];
   const server = createServer((request, response) => {
+    acceptHeaders.push(request.headers.accept);
     request.resume();
     response.writeHead(200, { "content-type": contentType });
     response.end(responseBody);
@@ -43,6 +45,7 @@ async function runCli(contentType, responseBody) {
     child.stderr.setEncoding("utf8").on("data", (chunk) => { stderr += chunk; });
     const [exitCode, signal] = await once(child, "close");
     assert.equal(signal, null, "CLI was killed or exceeded the five-second test guard");
+    assert.deepEqual(acceptHeaders, ["application/json, text/event-stream"]);
     return { exitCode, stdout, stderr };
   } finally {
     if (child && child.exitCode === null && child.signalCode === null) {
