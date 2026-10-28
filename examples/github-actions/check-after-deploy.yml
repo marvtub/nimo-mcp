@@ -12,7 +12,7 @@ jobs:
     if: github.event_name == 'workflow_dispatch' || github.event.deployment_status.state == 'success'
     runs-on: ubuntu-latest
     steps:
-      - uses: marvtub/nimo-mcp@v1
+      - uses: marvtub/nimo-mcp@v1.0.1
         with:
           # The deployed URL when the host reports one, else your homepage.
           url: ${{ github.event.deployment_status.environment_url || 'https://example.com' }}

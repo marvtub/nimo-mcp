@@ -1,6 +1,6 @@
 {
   "name": "nimo-check",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Check that a public page loads and how fast it is (Core Web Vitals) with nimo's free MCP server. No account needed.",
   "type": "module",
   "scripts": { "test": "node --test" },
