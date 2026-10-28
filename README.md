@@ -39,7 +39,7 @@ browser; no API key needed.
 **In your terminal** (Node 18+, nothing to install):
 
 ```console
-$ npx github:marvtub/nimo-mcp https://heynimo.com
+$ npx github:marvtub/nimo-mcp#v1.0.1 https://heynimo.com
 Checking...
 
 nimo check: https://heynimo.com (mobile)
@@ -57,6 +57,10 @@ Watch this page every 5 minutes with alerts in Slack or Telegram: https://heynim
 
 Add `--min-score 70` to exit with an error when a page gets slow, or `--json`
 for scripts. Free checks have hourly and daily limits.
+
+Without `#v1.0.1`, `npx github:marvtub/nimo-mcp` follows the default `main`
+branch rather than a fixed release. Cached installs may need refreshing to
+receive newer code.
 
 ## What's in this repo
 
@@ -192,7 +196,7 @@ jobs:
     if: github.event.deployment_status.state == 'success'
     runs-on: ubuntu-latest
     steps:
-      - uses: marvtub/nimo-mcp@v1
+      - uses: marvtub/nimo-mcp@v1.0.1
         with:
           url: ${{ github.event.deployment_status.environment_url }}
           min-score: 50   # optional: fail if the page gets much slower
@@ -202,6 +206,10 @@ The score, LCP, layout shift, server response and the fix to make first show
 up in the run summary, and as the outputs `score`, `lcp-ms`, `cls` and
 `ttfb-ms`. Free, no key or secret. Full example:
 [`examples/github-actions/check-after-deploy.yml`](examples/github-actions/check-after-deploy.yml).
+
+The existing `@v1` tag stays on its original release; it does not receive
+this patch automatically. Update your workflow to `@v1.0.1` to opt in, or
+pin the full release commit SHA for an immutable code reference.
 
 ## Claude skill: check the site after you ship
 

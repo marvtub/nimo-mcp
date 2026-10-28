@@ -2,8 +2,8 @@
 // Check that a public page loads and how fast it is, using nimo's free MCP
 // server (https://api.heynimo.com/try-mcp). No account, key or dependencies.
 //
-//   npx github:marvtub/nimo-mcp https://example.com
-//   npx github:marvtub/nimo-mcp https://example.com --min-score 70 --json
+//   npx github:marvtub/nimo-mcp#v1.0.1 https://example.com
+//   npx github:marvtub/nimo-mcp#v1.0.1 https://example.com --min-score 70 --json
 //
 // Exit codes: 0 ok, 1 the page failed or scored under --min-score,
 // 2 bad input or the check could not run (limit reached, network error).
