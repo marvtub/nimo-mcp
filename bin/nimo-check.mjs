@@ -48,20 +48,28 @@ function fail(message, code = 2) {
 }
 
 let rpcId = 0;
-async function callTool(name, args, deadline) {
-  const remaining = deadline - Date.now();
-  if (remaining <= 0) throw new Error("deadline exceeded");
-  const res = await fetch(ENDPOINT, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      accept: "application/json, text/event-stream",
-      "user-agent": "nimo-check (+https://github.com/marvtub/nimo-mcp)",
-    },
-    body: JSON.stringify({ jsonrpc: "2.0", id: ++rpcId, method: "tools/call", params: { name, arguments: args } }),
-    signal: AbortSignal.timeout(Math.max(1, Math.ceil(Math.min(30_000, remaining)))),
-  });
-  const body = await res.text();
+async function callTool(name, args, deadline, timeoutSeconds) {
+  const remaining = remainingTime(deadline, timeoutSeconds);
+  const deadlineLimitsRequest = remaining <= 30_000;
+  let res;
+  let body;
+  try {
+    res = await fetch(ENDPOINT, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        accept: "application/json, text/event-stream",
+        "user-agent": "nimo-check (+https://github.com/marvtub/nimo-mcp)",
+      },
+      body: JSON.stringify({ jsonrpc: "2.0", id: ++rpcId, method: "tools/call", params: { name, arguments: args } }),
+      signal: AbortSignal.timeout(Math.max(1, Math.ceil(Math.min(30_000, remaining)))),
+    });
+    body = await res.text();
+  } catch (error) {
+    if (deadlineLimitsRequest && error.name === "TimeoutError") throw deadlineError(timeoutSeconds);
+    throw error;
+  }
+  remainingTime(deadline, timeoutSeconds);
   let message;
   try { message = JSON.parse(body); } catch { throw new Error(`nimo answered with HTTP ${res.status}`); }
   if (res.status === 429 || message.error && !message.jsonrpc) throw new Error(message.error || "Too many requests. Try again later.");
@@ -75,6 +83,21 @@ async function callTool(name, args, deadline) {
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+function deadlineError(timeoutSeconds) {
+  return new Error(`no result after ${timeoutSeconds} seconds`);
+}
+
+function remainingTime(deadline, timeoutSeconds) {
+  const remaining = deadline - Date.now();
+  if (remaining <= 0) throw deadlineError(timeoutSeconds);
+  return remaining;
+}
+
+async function waitToPoll(deadline, timeoutSeconds) {
+  await sleep(Math.min(POLL_MS, remainingTime(deadline, timeoutSeconds)));
+  remainingTime(deadline, timeoutSeconds);
+}
 
 function ms(value) {
   if (value === null || value === undefined) return "n/a";
@@ -130,27 +153,20 @@ function printText(r) {
 async function main() {
   const opts = parseArgs(process.argv.slice(2));
   const deadline = Date.now() + opts.timeout * 1000;
-  const timedOut = () => Date.now() >= deadline;
-  const failIfTimedOut = () => {
-    if (timedOut()) fail(`no result after ${opts.timeout} seconds`);
-  };
   let job;
   try {
-    job = await callTool("check_website", { url: opts.url }, deadline);
+    job = await callTool("check_website", { url: opts.url }, deadline, opts.timeout);
     // The access token only authorizes reading this one check. Keep it in
     // memory and out of logs, since CI logs on public repos are public.
     const handle = { jobId: job.jobId, accessToken: job.accessToken };
     if (!opts.json) process.stderr.write("Checking");
     while (job.status === "queued" || job.status === "running") {
-      failIfTimedOut();
-      await sleep(Math.min(POLL_MS, Math.max(0, deadline - Date.now())));
-      failIfTimedOut();
+      await waitToPoll(deadline, opts.timeout);
       if (!opts.json) process.stderr.write(".");
-      job = await callTool("get_check", handle, deadline);
+      job = await callTool("get_check", handle, deadline, opts.timeout);
     }
     if (!opts.json) process.stderr.write("\n");
   } catch (error) {
-    failIfTimedOut();
     fail(error.message);
   }
 
