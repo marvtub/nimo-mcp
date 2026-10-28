@@ -48,11 +48,93 @@ function fail(message, code = 2) {
 }
 
 let rpcId = 0;
+
+function isRpcResponse(message, expectedId) {
+  return message !== null && typeof message === "object" && !Array.isArray(message)
+    && message.jsonrpc === "2.0" && message.id === expectedId
+    && !Object.hasOwn(message, "method")
+    && Object.hasOwn(message, "result") !== Object.hasOwn(message, "error");
+}
+
+function responseError(res, reason) {
+  return new Error(`nimo answered with HTTP ${res.status}: ${reason}`);
+}
+
+function parseMessage(body, res) {
+  try { return JSON.parse(body); }
+  catch { throw responseError(res, "invalid JSON response"); }
+}
+
+async function readSseResponse(res, expectedId) {
+  if (!res.body) throw responseError(res, "missing response body");
+  const reader = res.body.getReader();
+  // The streaming decoder preserves split UTF-8 characters and strips the BOM.
+  const decoder = new TextDecoder();
+  let line = "";
+  let skipLf = false;
+  let event = "";
+  let data = [];
+
+  const acceptLine = () => {
+    if (line === "") {
+      const currentEvent = event || "message";
+      const payload = data.length ? data.join("\n") : null;
+      // An empty event still ends the previous event's type and data buffers.
+      event = "";
+      data = [];
+      if (payload === null || currentEvent !== "message") return null;
+      const message = parseMessage(payload, res);
+      return isRpcResponse(message, expectedId) ? message : null;
+    }
+    if (line.startsWith(":")) return null;
+    const colon = line.indexOf(":");
+    const field = colon === -1 ? line : line.slice(0, colon);
+    let value = colon === -1 ? "" : line.slice(colon + 1);
+    if (value.startsWith(" ")) value = value.slice(1);
+    if (field === "event") event = value;
+    else if (field === "data") data.push(value);
+    return null;
+  };
+
+  const consume = (text) => {
+    for (const char of text) {
+      if (skipLf) {
+        skipLf = false;
+        if (char === "\n") continue;
+      }
+      if (char === "\r" || char === "\n") {
+        const message = acceptLine();
+        line = "";
+        skipLf = char === "\r";
+        if (message) return message;
+      } else line += char;
+    }
+    return null;
+  };
+
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      const message = consume(done ? decoder.decode() : decoder.decode(value, { stream: true }));
+      if (message) return message;
+      // EOF is not an event delimiter: never dispatch an incomplete frame.
+      if (done) throw responseError(res, "no matching JSON-RPC response");
+    }
+  } finally {
+    // Do not wait for EOF or keep receiving after a complete matching response.
+    try { await reader.cancel(); }
+    catch { /* Preserve the response/parse/timeout result if cancellation fails. */ }
+    finally { reader.releaseLock(); }
+  }
+}
+
 async function callTool(name, args, deadline, timeoutSeconds) {
+  const id = ++rpcId;
   const remaining = remainingTime(deadline, timeoutSeconds);
   const deadlineLimitsRequest = remaining <= 30_000;
+  const signal = AbortSignal.timeout(Math.max(1, Math.ceil(Math.min(30_000, remaining))));
   let res;
-  let body;
+  let message;
   try {
     res = await fetch(ENDPOINT, {
       method: "POST",
@@ -61,24 +143,29 @@ async function callTool(name, args, deadline, timeoutSeconds) {
         accept: "application/json, text/event-stream",
         "user-agent": "nimo-check (+https://github.com/marvtub/nimo-mcp)",
       },
-      body: JSON.stringify({ jsonrpc: "2.0", id: ++rpcId, method: "tools/call", params: { name, arguments: args } }),
-      signal: AbortSignal.timeout(Math.max(1, Math.ceil(Math.min(30_000, remaining)))),
+      body: JSON.stringify({ jsonrpc: "2.0", id, method: "tools/call", params: { name, arguments: args } }),
+      signal,
     });
-    body = await res.text();
+    const contentType = res.headers.get("content-type")?.split(";", 1)[0].trim().toLowerCase();
+    message = contentType === "text/event-stream"
+      ? await readSseResponse(res, id)
+      : parseMessage(await res.text(), res);
   } catch (error) {
-    if (deadlineLimitsRequest && error.name === "TimeoutError") throw deadlineError(timeoutSeconds);
+    // Node versions can report a body timeout as AbortError rather than TimeoutError.
+    if (deadlineLimitsRequest && signal.aborted) throw deadlineError(timeoutSeconds);
     throw error;
   }
   remainingTime(deadline, timeoutSeconds);
-  let message;
-  try { message = JSON.parse(body); } catch { throw new Error(`nimo answered with HTTP ${res.status}`); }
-  if (res.status === 429 || message.error && !message.jsonrpc) throw new Error(message.error || "Too many requests. Try again later.");
+  if (res.status === 429 || message?.error && !message.jsonrpc) throw new Error(message?.error?.message || message?.error || "Too many requests. Try again later.");
+  if (!res.ok) throw responseError(res, "request failed");
+  if (!isRpcResponse(message, id)) throw responseError(res, "no matching JSON-RPC response");
   if (message.error) throw new Error(message.error.message || "The request failed.");
   const result = message.result;
   const text = result?.content?.find((c) => c.type === "text")?.text;
   const data = result?.structuredContent ?? (text ? JSON.parse(text) : null);
   if (result?.isError) throw new Error(data?.error || "The check could not run.");
   if (!data) throw new Error("nimo returned an empty result.");
+  if (!["queued", "running", "completed", "failed"].includes(data.status)) throw new Error("nimo returned an invalid check status.");
   return data;
 }
 
