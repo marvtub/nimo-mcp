@@ -42,8 +42,48 @@ function parseArgs(argv) {
   return opts;
 }
 
+// Response handles authorize private checks. Never echo them, even if an
+// endpoint repeats them inside a report or an error message.
+const privateHandleValues = new Set();
+function rememberHandle(value) {
+  for (const key of ["jobId", "accessToken"]) {
+    if (typeof value?.[key] === "string" && value[key]) privateHandleValues.add(value[key]);
+  }
+}
+
+function redactHandles(value) {
+  let text = String(value ?? "");
+  for (const secret of [...privateHandleValues].sort((a, b) => b.length - a.length)) {
+    text = text.split(secret).join("[private check handle]");
+  }
+  return text;
+}
+
+const unicodeEscape = (value) => value.split("")
+  .map((unit) => `\\u${unit.charCodeAt(0).toString(16).padStart(4, "0")}`).join("");
+
+// Treat command introducers as unsafe anywhere, including JSON strings.
+// Encode the entire V2 (::) and legacy V1 (##[) introducers. The legacy runner
+// parser searches whole lines; prefixes and CR/LF removal are not a boundary.
+function escapeLogCommands(value) {
+  return value.replace(/::|##\[/g, unicodeEscape);
+}
+
+function logText(value) {
+  return escapeLogCommands(redactHandles(value)
+    .replace(/[\u0000-\u0009\u000b-\u001f\u007f-\u009f\p{Cf}\u2028\u2029]/gu, unicodeEscape));
+}
+
+function logJson(value) {
+  const json = JSON.stringify(value, (_key, item) => typeof item === "string" ? redactHandles(item) : item, 2);
+  // Both introducers can only occur inside string tokens in valid JSON.
+  // JSON Unicode escapes preserve parsed values; runner logs do not decode them.
+  return escapeLogCommands(json)
+    .replace(/[\u007f-\u009f\p{Cf}\u2028\u2029]/gu, unicodeEscape);
+}
+
 function fail(message, code = 2) {
-  process.stderr.write(`nimo-check: ${message}\n`);
+  process.stderr.write(`nimo-check: ${logText(message)}\n`);
   process.exit(code);
 }
 
@@ -130,6 +170,7 @@ async function readSseResponse(res, expectedId) {
 
 async function callTool(name, args, deadline, timeoutSeconds) {
   const id = ++rpcId;
+  rememberHandle(args);
   const remaining = remainingTime(deadline, timeoutSeconds);
   const deadlineLimitsRequest = remaining <= 30_000;
   const signal = AbortSignal.timeout(Math.max(1, Math.ceil(Math.min(30_000, remaining))));
@@ -162,7 +203,12 @@ async function callTool(name, args, deadline, timeoutSeconds) {
   if (message.error) throw new Error(message.error.message || "The request failed.");
   const result = message.result;
   const text = result?.content?.find((c) => c.type === "text")?.text;
-  const data = result?.structuredContent ?? (text ? JSON.parse(text) : null);
+  let data = result?.structuredContent;
+  if (data == null && text) {
+    // Native JSON parse errors can include response snippets (and handles).
+    try { data = JSON.parse(text); } catch { throw new Error("nimo returned invalid tool JSON."); }
+  }
+  rememberHandle(data);
   if (result?.isError) throw new Error(data?.error || "The check could not run.");
   if (!data) throw new Error("nimo returned an empty result.");
   if (!["queued", "running", "completed", "failed"].includes(data.status)) throw new Error("nimo returned an invalid check status.");
@@ -182,8 +228,15 @@ function remainingTime(deadline, timeoutSeconds) {
 }
 
 async function waitToPoll(deadline, timeoutSeconds) {
-  await sleep(Math.min(POLL_MS, remainingTime(deadline, timeoutSeconds)));
-  remainingTime(deadline, timeoutSeconds);
+  const pollAt = Date.now() + POLL_MS;
+  while (true) {
+    const remaining = remainingTime(deadline, timeoutSeconds);
+    const untilPoll = pollAt - Date.now();
+    if (untilPoll <= 0) return;
+    // A timer can wake early. Recheck both absolute targets on every wake;
+    // a capped sleep finishing is not permission to start an early poll.
+    await sleep(Math.min(untilPoll, remaining));
+  }
 }
 
 function ms(value) {
@@ -201,6 +254,58 @@ function grade(metric, value) {
 
 function fixTitle(item) {
   return item?.title || item?.headline || item?.summary || item?.description || null;
+}
+
+function invalidResult(field) {
+  throw new Error(`nimo returned an invalid result (${field}).`);
+}
+
+function validateOptionalString(value, field) {
+  if (value === undefined || value === null) return;
+  if (typeof value !== "string") invalidResult(field);
+}
+
+function validateFinding(value, field) {
+  if (value === undefined || value === null) return;
+  if (typeof value !== "object" || Array.isArray(value)) invalidResult(field);
+  for (const key of ["title", "headline", "summary", "description"]) {
+    validateOptionalString(value[key], `${field}.${key}`);
+  }
+}
+
+function validateJob(job) {
+  if (!job || typeof job !== "object" || Array.isArray(job)) invalidResult("response");
+  if (!["queued", "running", "completed", "failed"].includes(job.status)) invalidResult("status");
+  validateOptionalString(job.jobId, "jobId");
+  validateOptionalString(job.accessToken, "accessToken");
+  validateOptionalString(job.url, "url");
+  validateOptionalString(job.device, "device");
+  validateOptionalString(job.measuredAt, "measuredAt");
+  validateOptionalString(job.error, "error");
+  if ((job.status === "queued" || job.status === "running") &&
+      (typeof job.jobId !== "string" || typeof job.accessToken !== "string")) {
+    invalidResult("polling credentials");
+  }
+
+  if (job.report !== undefined && job.report !== null) {
+    if (typeof job.report !== "object" || Array.isArray(job.report)) invalidResult("report");
+    validateOptionalString(job.report.summary, "report.summary");
+    validateFinding(job.report.primaryFinding, "report.primaryFinding");
+    if (job.report.recommendations !== undefined && job.report.recommendations !== null) {
+      if (!Array.isArray(job.report.recommendations)) invalidResult("report.recommendations");
+      job.report.recommendations.forEach((item, index) => validateFinding(item, `report.recommendations[${index}]`));
+    }
+    if (job.report.metrics !== undefined && job.report.metrics !== null) {
+      if (typeof job.report.metrics !== "object" || Array.isArray(job.report.metrics)) invalidResult("report.metrics");
+      for (const key of ["performanceScore", "lcp", "cls", "inp", "ttfb"]) {
+        const value = job.report.metrics[key];
+        if (value !== undefined && value !== null && (typeof value !== "number" || !Number.isFinite(value))) {
+          invalidResult(`report.metrics.${key}`);
+        }
+      }
+    }
+  }
+  return job;
 }
 
 function summarize(job) {
@@ -226,14 +331,14 @@ function summarize(job) {
 
 function printText(r) {
   const line = (label, value, g) => `  ${label.padEnd(25)}${String(value).padEnd(10)}${g}`;
-  console.log(`\nnimo check: ${r.url}${r.device ? ` (${r.device})` : ""}\n`);
+  console.log(`\nnimo check: ${logText(r.url)}${r.device ? ` (${logText(r.device)})` : ""}\n`);
   console.log(line("Performance score", r.score ?? "n/a", grade("score", r.score)));
   console.log(line("Largest paint (LCP)", ms(r.lcpMs), grade("lcp", r.lcpMs)));
   console.log(line("Layout shift (CLS)", r.cls ?? "n/a", grade("cls", r.cls)));
   if (r.inpMs !== null) console.log(line("Response to taps (INP)", ms(r.inpMs), grade("inp", r.inpMs)));
   console.log(line("Server response (TTFB)", ms(r.ttfbMs), grade("ttfb", r.ttfbMs)));
-  if (r.summary) console.log(`\n${r.summary}`);
-  if (r.fixes.length) console.log(`\nFix first:\n${r.fixes.map((f) => `  - ${f}`).join("\n")}`);
+  if (r.summary) console.log(`\n${logText(r.summary)}`);
+  if (r.fixes.length) console.log(`\nFix first:\n${r.fixes.map((f) => `  - ${logText(f)}`).join("\n")}`);
   console.log("\nWatch this page every 5 minutes with alerts in Slack or Telegram: https://heynimo.com\n");
 }
 
@@ -242,7 +347,7 @@ async function main() {
   const deadline = Date.now() + opts.timeout * 1000;
   let job;
   try {
-    job = await callTool("check_website", { url: opts.url }, deadline, opts.timeout);
+    job = validateJob(await callTool("check_website", { url: opts.url }, deadline, opts.timeout));
     // The access token only authorizes reading this one check. Keep it in
     // memory and out of logs, since CI logs on public repos are public.
     const handle = { jobId: job.jobId, accessToken: job.accessToken };
@@ -250,7 +355,7 @@ async function main() {
     while (job.status === "queued" || job.status === "running") {
       await waitToPoll(deadline, opts.timeout);
       if (!opts.json) process.stderr.write(".");
-      job = await callTool("get_check", handle, deadline, opts.timeout);
+      job = validateJob(await callTool("get_check", handle, deadline, opts.timeout));
     }
     if (!opts.json) process.stderr.write("\n");
   } catch (error) {
@@ -258,14 +363,14 @@ async function main() {
   }
 
   if (job.status === "failed") {
-    if (opts.json) console.log(JSON.stringify({ url: opts.url, ok: false, error: job.error }, null, 2));
-    else console.error(`\nThe page could not be checked: ${job.error}`);
+    if (opts.json) console.log(logJson({ url: opts.url, ok: false, error: job.error }));
+    else console.error(`\nThe page could not be checked: ${logText(job.error)}`);
     process.exit(1);
   }
 
   const result = summarize(job);
   const belowMin = opts.minScore !== null && (result.score === null || result.score < opts.minScore);
-  if (opts.json) console.log(JSON.stringify({ ok: !belowMin, ...result }, null, 2));
+  if (opts.json) console.log(logJson({ ok: !belowMin, ...result }));
   else printText(result);
   writeGithubOutputs(result);
   if (belowMin) {
@@ -277,22 +382,36 @@ async function main() {
 function writeGithubOutputs(r) {
   if (process.env.GITHUB_OUTPUT) {
     appendFileSync(process.env.GITHUB_OUTPUT, [
-      `score=${r.score ?? ""}`, `lcp-ms=${r.lcpMs ?? ""}`, `cls=${r.cls ?? ""}`, `ttfb-ms=${r.ttfbMs ?? ""}`, "",
+      githubOutput("score", r.score), githubOutput("lcp-ms", r.lcpMs), githubOutput("cls", r.cls),
+      githubOutput("ttfb-ms", r.ttfbMs), "",
     ].join("\n"));
   }
   if (process.env.GITHUB_STEP_SUMMARY) {
     const row = (label, value, metric, raw) => `| ${label} | ${value} | ${grade(metric, raw)} |`;
     appendFileSync(process.env.GITHUB_STEP_SUMMARY, [
-      `### nimo check: ${r.url}`, "",
+      `### nimo check: ${escapeMarkdown(r.url)}`, "",
       "| Measure | Value | |", "| --- | --- | --- |",
       row("Performance score", r.score ?? "n/a", "score", r.score),
       row("Largest paint (LCP)", ms(r.lcpMs), "lcp", r.lcpMs),
       row("Layout shift (CLS)", r.cls ?? "n/a", "cls", r.cls),
       row("Server response (TTFB)", ms(r.ttfbMs), "ttfb", r.ttfbMs),
-      "", ...(r.fixes.length ? ["**Fix first**", "", ...r.fixes.map((f) => `- ${f}`), ""] : []),
+      "", ...(r.fixes.length ? ["**Fix first**", "", ...r.fixes.map((f) => `- ${escapeMarkdown(f)}`), ""] : []),
       "Checked with [nimo](https://heynimo.com).", "",
     ].join("\n"));
   }
 }
 
-main();
+function githubOutput(name, value) {
+  const serialized = value === null || value === undefined ? "" : String(value);
+  if (/[\r\n]/.test(serialized)) throw new Error(`Cannot write multiline GitHub output ${name}.`);
+  return `${name}=${serialized}`;
+}
+
+function escapeMarkdown(value) {
+  return redactHandles(value)
+    .replace(/[\u0000-\u001f\u007f]+/g, " ")
+    .replace(/([!"#$%&'()*+,\-./:;<=>?@[\\\]^_`{|}~])/g, "\\$1");
+}
+
+// Keep unexpected failures on the same safe log boundary, not a raw stack.
+main().catch((error) => fail(error.message));
