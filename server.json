@@ -4,12 +4,24 @@
   "title": "nimo",
   "description": "Monitoring that tells you the fix: uptime, Core Web Vitals, cron check-ins, Journey Watch.",
   "icons": [
-    { "src": "https://raw.githubusercontent.com/marvtub/nimo-mcp/main/.github/assets/nimo-icon.png", "mimeType": "image/png", "sizes": ["512x512"] }
+    {
+      "src": "https://raw.githubusercontent.com/marvtub/nimo-mcp/main/.github/assets/nimo-icon.png",
+      "mimeType": "image/png",
+      "sizes": [
+        "512x512"
+      ]
+    }
   ],
-  "repository": { "url": "https://github.com/marvtub/nimo-mcp", "source": "github" },
-  "version": "1.0.0",
+  "repository": {
+    "url": "https://github.com/marvtub/nimo-mcp",
+    "source": "github"
+  },
+  "version": "1.0.1",
   "websiteUrl": "https://heynimo.com/docs/mcp",
   "remotes": [
-    { "type": "streamable-http", "url": "https://api.heynimo.com/mcp-server" }
+    {
+      "type": "streamable-http",
+      "url": "https://api.heynimo.com/mcp-server"
+    }
   ]
 }
