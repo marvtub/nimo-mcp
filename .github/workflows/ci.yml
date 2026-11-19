@@ -46,11 +46,25 @@ jobs:
           node --check bin/nimo-check.mjs
           node --check examples/heartbeats/node-job.mjs
           bash -n examples/heartbeats/postgres-backup.sh
-      - name: CLI help and bad input
+      - name: Installed CLI help and bad input
+        shell: bash
         run: |
-          node bin/nimo-check.mjs --help
-          set +e; node bin/nimo-check.mjs; code=$?; set -e
-          test "$code" = 2
+          smoke_dir=$(mktemp -d)
+          export npm_config_cache="$smoke_dir/cache"
+          export npm_config_update_notifier=false
+          tarball=$(npm pack --offline --ignore-scripts \
+            --pack-destination "$smoke_dir")
+          cd "$smoke_dir" || exit
+          npm install --offline --ignore-scripts --no-audit --no-fund \
+            "./$tarball"
+
+          help=$(./node_modules/.bin/nimo-check --help)
+          printf '%s\n' "$help"
+          grep -q '^Usage: nimo-check ' <<< "$help"
+
+          code=0
+          ./node_modules/.bin/nimo-check || code=$?
+          test "$code" -eq 2
       - name: Tests
         run: npm test
       - name: server.json is valid JSON
