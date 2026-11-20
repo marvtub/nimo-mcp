@@ -222,16 +222,16 @@ function deadlineError(timeoutSeconds) {
 }
 
 function remainingTime(deadline, timeoutSeconds) {
-  const remaining = deadline - Date.now();
+  const remaining = deadline - performance.now();
   if (remaining <= 0) throw deadlineError(timeoutSeconds);
   return remaining;
 }
 
 async function waitToPoll(deadline, timeoutSeconds) {
-  const pollAt = Date.now() + POLL_MS;
+  const pollAt = performance.now() + POLL_MS;
   while (true) {
     const remaining = remainingTime(deadline, timeoutSeconds);
-    const untilPoll = pollAt - Date.now();
+    const untilPoll = pollAt - performance.now();
     if (untilPoll <= 0) return;
     // A timer can wake early. Recheck both absolute targets on every wake;
     // a capped sleep finishing is not permission to start an early poll.
@@ -344,7 +344,8 @@ function printText(r) {
 
 async function main() {
   const opts = parseArgs(process.argv.slice(2));
-  const deadline = Date.now() + opts.timeout * 1000;
+  // Measure the timeout in elapsed time, independent of wall-clock changes.
+  const deadline = performance.now() + opts.timeout * 1000;
   let job;
   try {
     job = validateJob(await callTool("check_website", { url: opts.url }, deadline, opts.timeout));
