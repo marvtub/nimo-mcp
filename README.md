@@ -204,8 +204,13 @@ jobs:
 
 The score, LCP, layout shift, server response and the fix to make first show
 up in the run summary, and as the outputs `score`, `lcp-ms`, `cls` and
-`ttfb-ms`. Free, no key or secret. Full example:
-[`examples/github-actions/check-after-deploy.yml`](examples/github-actions/check-after-deploy.yml).
+`ttfb-ms`. Free, no key or secret.
+
+Copy the [full workflow](examples/github-actions/check-after-deploy.yml) to
+`.github/workflows/` for automatic and manual checks. For a manual check,
+choose **Run workflow** and enter the public URL to check. If a successful
+deployment doesn't report a URL, the workflow fails with a note in the run
+summary and does not check any site.
 
 The existing `@v1` tag stays on its original release; it does not receive
 this patch automatically. Update your workflow to `@v1.0.1` to opt in, or
