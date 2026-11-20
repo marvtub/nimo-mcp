@@ -67,5 +67,23 @@ jobs:
           test "$code" -eq 2
       - name: Tests
         run: npm test
-      - name: server.json is valid JSON
-        run: node -e 'JSON.parse(require("fs").readFileSync("server.json","utf8"))'
+      - name: Check server.json syntax and description
+        run: |
+          node --input-type=module <<'NODE'
+          import { readFileSync } from "node:fs";
+
+          // See ServerDetail.description in the declared 2025-12-11 schema.
+          const server = JSON.parse(readFileSync("server.json", "utf8"));
+          const description = server?.description;
+          const length = typeof description === "string"
+            ? [...description].length : null;
+          if (length === null || length < 1 || length > 100) {
+            const found = length === null
+              ? "missing or not a string" : `${length} code points`;
+            console.error(
+              "Edit server.json: description must be a string of 1-100 " +
+              `Unicode code points (found ${found}).`,
+            );
+            process.exitCode = 1;
+          }
+          NODE
