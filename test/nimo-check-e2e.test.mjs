@@ -1,57 +1,16 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { createServer } from "node:http";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
+import { createNimoFixture } from "../test-support/nimo-loopback.mjs";
 
 const execFileAsync = promisify(execFile);
 const cli = fileURLToPath(new URL("../bin/nimo-check.mjs", import.meta.url));
 
 test("CLI returns machine-readable results for completed and failed checks", { timeout: 12_000 }, async () => {
   const requests = [];
-  const server = createServer(async (request, response) => {
-    let rawBody = "";
-    for await (const chunk of request) rawBody += chunk;
-    const body = JSON.parse(rawBody);
-    requests.push(body);
-
-    const url = body.params.arguments.url;
-    const job = url === "https://example.com"
-      ? {
-          jobId: "a".repeat(64),
-          accessToken: "b".repeat(64),
-          status: "completed",
-          url,
-          device: "mobile",
-          measuredAt: "2026-01-02T03:04:05.000Z",
-          report: {
-            metrics: {
-              performanceScore: 87,
-              lcp: 2450,
-              cls: 0.02,
-              inp: 180,
-              ttfb: 320,
-            },
-            summary: "The fixture page loaded successfully.",
-            primaryFinding: { title: "Compress the hero image" },
-            recommendations: [{ title: "Cache static files" }],
-          },
-        }
-      : {
-          jobId: "c".repeat(64),
-          accessToken: "d".repeat(64),
-          status: "failed",
-          error: "The fixture page could not be reached.",
-        };
-
-    response.writeHead(200, { "content-type": "application/json" });
-    response.end(JSON.stringify({
-      jsonrpc: "2.0",
-      id: body.id,
-      result: { structuredContent: job },
-    }));
-  });
+  const server = createNimoFixture(requests);
 
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   const { port } = server.address();
