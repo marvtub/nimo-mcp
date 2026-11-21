@@ -36,11 +36,6 @@ permissions:
 
 jobs:
   check:
-    # One-time sensitivity check; the final PR head keeps only the normal job.
-    strategy:
-      fail-fast: false
-      matrix:
-        without-score-mapping: [false, true]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -94,13 +89,6 @@ jobs:
             process.exitCode = 1;
           }
           NODE
-      - name: Remove only the score mapping in this disposable checkout
-        if: ${{ matrix.without-score-mapping }}
-        shell: bash
-        run: |
-          sed -i '/^  score:$/,+2{/^    value: /d;}' action.yml
-          test "$(git diff --numstat -- action.yml)" = $'0\t1\taction.yml'
-          git diff -- action.yml
       - name: Start loopback Nimo fixture
         id: fixture
         shell: bash
@@ -138,8 +126,6 @@ jobs:
           url: https://example.com
           timeout: "5"
       - name: Assert the published Nimo score
-        id: assert-score
-        continue-on-error: ${{ matrix.without-score-mapping }}
         shell: bash
         env:
           NIMO_SCORE: ${{ steps.nimo.outputs.score }}
@@ -154,15 +140,3 @@ jobs:
             exit 1
           fi
           echo 'The next step received Nimo score 87.'
-      - name: Verify the mapping-only control failed at the consumer
-        if: ${{ matrix.without-score-mapping }}
-        shell: bash
-        env:
-          ACTION_OUTCOME: ${{ steps.nimo.outcome }}
-          ASSERTION_OUTCOME: ${{ steps.assert-score.outcome }}
-          NIMO_SCORE: ${{ steps.nimo.outputs.score }}
-        run: |
-          test "$ACTION_OUTCOME" = success
-          test "$ASSERTION_OUTCOME" = failure
-          test -z "$NIMO_SCORE"
-          echo 'The action succeeded, but the consumer rejected an empty score.'
