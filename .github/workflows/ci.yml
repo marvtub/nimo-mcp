@@ -13,6 +13,7 @@ on:
       - "package.json"
       - "server.json"
       - "test/**"
+      - "test-support/**"
   pull_request:
     paths:
       - ".github/workflows/ci.yml"
@@ -24,6 +25,7 @@ on:
       - "package.json"
       - "server.json"
       - "test/**"
+      - "test-support/**"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -34,6 +36,11 @@ permissions:
 
 jobs:
   check:
+    # One-time sensitivity check; the final PR head keeps only the normal job.
+    strategy:
+      fail-fast: false
+      matrix:
+        without-score-mapping: [false, true]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -87,3 +94,75 @@ jobs:
             process.exitCode = 1;
           }
           NODE
+      - name: Remove only the score mapping in this disposable checkout
+        if: ${{ matrix.without-score-mapping }}
+        shell: bash
+        run: |
+          sed -i '/^  score:$/,+2{/^    value: /d;}' action.yml
+          test "$(git diff --numstat -- action.yml)" = $'0\t1\taction.yml'
+          git diff -- action.yml
+      - name: Start loopback Nimo fixture
+        id: fixture
+        shell: bash
+        run: |
+          port_file=$(mktemp)
+          node --input-type=module > "$port_file" 2> "$port_file.err" <<'NODE' &
+          import { createNimoFixture } from "./test-support/nimo-loopback.mjs";
+          const server = createNimoFixture();
+          server.listen(0, "127.0.0.1", () => {
+            console.log(server.address().port);
+          });
+          setTimeout(() => {
+            server.close();
+            server.closeAllConnections();
+          }, 60_000).unref();
+          NODE
+          fixture_pid=$!
+          for ((attempt = 0; attempt < 50; attempt++)); do
+            if read -r port < "$port_file" && [[ "$port" =~ ^[0-9]+$ ]]; then
+              printf 'port=%s\n' "$port" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            kill -0 "$fixture_pid" 2>/dev/null || break
+            sleep 0.1
+          done
+          echo 'Loopback Nimo fixture did not start.' >&2
+          cat "$port_file.err" >&2
+          exit 1
+      - name: Run the Nimo action against the fixture
+        id: nimo
+        uses: ./
+        env:
+          NIMO_TRY_MCP_URL: http://127.0.0.1:${{ steps.fixture.outputs.port }}
+        with:
+          url: https://example.com
+          timeout: "5"
+      - name: Assert the published Nimo score
+        id: assert-score
+        continue-on-error: ${{ matrix.without-score-mapping }}
+        shell: bash
+        env:
+          NIMO_SCORE: ${{ steps.nimo.outputs.score }}
+        run: |
+          if [[ -z "$NIMO_SCORE" ]]; then
+            echo 'Nimo score output is empty; expected 87.' >&2
+            exit 1
+          fi
+          if [[ "$NIMO_SCORE" != 87 ]]; then
+            printf 'Wrong Nimo score output: expected 87, got %q.\n' \
+              "$NIMO_SCORE" >&2
+            exit 1
+          fi
+          echo 'The next step received Nimo score 87.'
+      - name: Verify the mapping-only control failed at the consumer
+        if: ${{ matrix.without-score-mapping }}
+        shell: bash
+        env:
+          ACTION_OUTCOME: ${{ steps.nimo.outcome }}
+          ASSERTION_OUTCOME: ${{ steps.assert-score.outcome }}
+          NIMO_SCORE: ${{ steps.nimo.outputs.score }}
+        run: |
+          test "$ACTION_OUTCOME" = success
+          test "$ASSERTION_OUTCOME" = failure
+          test -z "$NIMO_SCORE"
+          echo 'The action succeeded, but the consumer rejected an empty score.'
