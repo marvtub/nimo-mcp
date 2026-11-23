@@ -1,12 +1,15 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
+import { dirname } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { createNimoFixture } from "../test-support/nimo-loopback.mjs";
 
 const execFileAsync = promisify(execFile);
-const cli = fileURLToPath(new URL("../bin/nimo-check.mjs", import.meta.url));
+const installedCli = process.env.NIMO_CHECK_BIN;
+const cli = installedCli || process.execPath;
+const cliArgs = installedCli ? [] : [fileURLToPath(new URL("../bin/nimo-check.mjs", import.meta.url))];
 
 test("CLI returns machine-readable results for completed and failed checks", { timeout: 12_000 }, async () => {
   const requests = [];
@@ -15,14 +18,19 @@ test("CLI returns machine-readable results for completed and failed checks", { t
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   const { port } = server.address();
   const childOptions = {
-    env: { NIMO_TRY_MCP_URL: `http://127.0.0.1:${port}` },
+    env: {
+      NIMO_TRY_MCP_URL: `http://127.0.0.1:${port}`,
+      ...(installedCli && { PATH: dirname(process.execPath) }),
+    },
     timeout: 5_000,
     killSignal: "SIGKILL",
     maxBuffer: 256 * 1024,
   };
 
+  const runCheck = (url) => execFileAsync(cli, [...cliArgs, url, "--json"], childOptions);
+
   try {
-    const success = await execFileAsync(process.execPath, [cli, "https://example.com", "--json"], childOptions);
+    const success = await runCheck("https://example.com");
     assert.equal(success.stderr, "");
     assert.deepEqual(JSON.parse(success.stdout), {
       ok: true,
@@ -39,7 +47,7 @@ test("CLI returns machine-readable results for completed and failed checks", { t
     });
 
     await assert.rejects(
-      execFileAsync(process.execPath, [cli, "https://broken.example", "--json"], childOptions),
+      runCheck("https://broken.example"),
       (error) => {
         assert.equal(error.code, 1);
         assert.equal(error.stderr, "");
