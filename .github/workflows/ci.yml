@@ -140,3 +140,40 @@ jobs:
             exit 1
           fi
           echo 'The next step received Nimo score 87.'
+      - name: Prepare the action deadline watchdog
+        shell: bash
+        run: |
+          cat > "$RUNNER_TEMP/nimo-deadline.bash" <<'BASH'
+          node() {
+            local code=0 stderr="$RUNNER_TEMP/nimo-deadline.stderr"
+            timeout -k 2s 10s node "$@" 2> "$stderr" || code=$?
+            printf '%s\n' "$code" > "$RUNNER_TEMP/nimo-deadline.exit"
+            cat "$stderr" >&2
+            return "$code"
+          }
+          BASH
+      - name: Run the Nimo action on a pending job
+        id: nimo_deadline
+        uses: ./
+        continue-on-error: true
+        timeout-minutes: 1
+        env:
+          BASH_ENV: ${{ runner.temp }}/nimo-deadline.bash
+          NIMO_TRY_MCP_URL: http://127.0.0.1:${{ steps.fixture.outputs.port }}
+        with:
+          url: https://pending.example
+          timeout: "2"
+      - name: Assert the Nimo action's own deadline failure
+        shell: bash
+        env:
+          ACTION_OUTCOME: ${{ steps.nimo_deadline.outcome }}
+        run: |
+          # The CLI prints Checking only after it receives a valid job.
+          expected='Checkingnimo-check: no result after 2 seconds'
+          if [[ "$ACTION_OUTCOME" != failure ]] ||
+             ! grep -Fxq '2' "$RUNNER_TEMP/nimo-deadline.exit" ||
+             ! grep -Fxq "$expected" "$RUNNER_TEMP/nimo-deadline.stderr"; then
+            echo 'Expected a pending job and a Nimo timeout at 2s.' >&2
+            exit 1
+          fi
+          echo 'Nimo accepted the pending job and reported its 2s timeout.'

@@ -7,8 +7,9 @@ export function createNimoFixture(requests = []) {
     const body = JSON.parse(rawBody);
     requests.push(body);
 
-    const url = body.params.arguments.url;
-    const job = url === "https://example.com"
+    const { name, arguments: { url, jobId } } = body.params;
+    const pendingId = "e".repeat(64);
+    let job = url === "https://example.com"
       ? {
           jobId: "a".repeat(64),
           accessToken: "b".repeat(64),
@@ -35,6 +36,9 @@ export function createNimoFixture(requests = []) {
           status: "failed",
           error: "The fixture page could not be reached.",
         };
+    if (url === "https://pending.example" || (name === "get_check" && jobId === pendingId)) {
+      job = { jobId: pendingId, accessToken: "f".repeat(64), status: "queued" };
+    }
 
     response.writeHead(200, { "content-type": "application/json" });
     response.end(JSON.stringify({
