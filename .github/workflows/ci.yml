@@ -48,9 +48,10 @@ jobs:
           node --check bin/nimo-check.mjs
           node --check examples/heartbeats/node-job.mjs
           bash -n examples/heartbeats/postgres-backup.sh
-      - name: Installed CLI help and bad input
+      - name: Installed CLI smoke and loopback results
         shell: bash
         run: |
+          fixture_test="$PWD/test/nimo-check-e2e.test.mjs"
           smoke_dir=$(mktemp -d)
           export npm_config_cache="$smoke_dir/cache"
           export npm_config_update_notifier=false
@@ -67,6 +68,9 @@ jobs:
           code=0
           ./node_modules/.bin/nimo-check || code=$?
           test "$code" -eq 2
+
+          NIMO_CHECK_BIN="$smoke_dir/node_modules/.bin/nimo-check" \
+            node --test "$fixture_test"
       - name: Tests
         run: npm test
       - name: Check server.json syntax and description
