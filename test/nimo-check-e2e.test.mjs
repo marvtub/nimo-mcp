@@ -34,6 +34,7 @@ test("CLI exits on a deadline and the next check returns a fresh result", { time
         assert.equal(error.code, 2);
         assert.equal(error.stdout, "");
         assert.equal(error.stderr, "nimo-check: no result after 2 seconds\n");
+        assert.ok(elapsed >= 1_500, `CLI reported its deadline early after ${Math.round(elapsed)} ms`);
         // Allow for startup and scheduling without waiting for the watchdog.
         assert.ok(elapsed < 4_500, `CLI deadline exit took ${Math.round(elapsed)} ms (expected under 4500 ms)`);
         return true;
