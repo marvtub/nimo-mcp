@@ -8,7 +8,7 @@ import { createNimoFixture } from "../test-support/nimo-loopback.mjs";
 const execFileAsync = promisify(execFile);
 const cli = fileURLToPath(new URL("../bin/nimo-check.mjs", import.meta.url));
 
-test("CLI returns machine-readable results for completed and failed checks", { timeout: 12_000 }, async () => {
+test("CLI exits on a deadline and the next check returns a fresh result", { timeout: 30_000 }, async () => {
   const requests = [];
   const server = createNimoFixture(requests);
 
@@ -22,6 +22,25 @@ test("CLI returns machine-readable results for completed and failed checks", { t
   };
 
   try {
+    const started = performance.now();
+    await assert.rejects(
+      execFileAsync(process.execPath, [cli, "https://pending.example", "--json", "--timeout", "2"], {
+        ...childOptions,
+        timeout: 12_000,
+      }),
+      (error) => {
+        const elapsed = performance.now() - started;
+        assert.equal(error.signal, null, "CLI should exit without a watchdog kill");
+        assert.equal(error.code, 2);
+        assert.equal(error.stdout, "");
+        assert.equal(error.stderr, "nimo-check: no result after 2 seconds\n");
+        assert.ok(elapsed >= 1_500, `CLI reported its deadline early after ${Math.round(elapsed)} ms`);
+        // Allow for startup and scheduling without waiting for the watchdog.
+        assert.ok(elapsed < 4_500, `CLI deadline exit took ${Math.round(elapsed)} ms (expected under 4500 ms)`);
+        return true;
+      },
+    );
+
     const success = await execFileAsync(process.execPath, [cli, "https://example.com", "--json"], childOptions);
     assert.equal(success.stderr, "");
     assert.deepEqual(JSON.parse(success.stdout), {
@@ -53,11 +72,16 @@ test("CLI returns machine-readable results for completed and failed checks", { t
     );
 
     assert.deepEqual(
-      requests.map((request) => request.params.name),
-      ["check_website", "check_website"],
+      requests.map(({ params }) => [params.name, params.arguments.url]),
+      [
+        ["check_website", "https://pending.example"],
+        ["check_website", "https://example.com"],
+        ["check_website", "https://broken.example"],
+      ],
     );
   } finally {
+    const closed = new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     server.closeAllConnections();
-    await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    await closed;
   }
 });
