@@ -1,0 +1,32 @@
+name: Workflow examples
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/workflow-examples.yml"
+      - "examples/github-actions/check-after-deploy.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Lint workflow examples
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: Check workflow syntax and expressions
+        shell: bash
+        run: |
+          archive="$RUNNER_TEMP/actionlint_1.7.12_linux_amd64.tar.gz"
+          curl --fail --silent --show-error --location --output "$archive" \
+            https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz
+          sha256=8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+          printf '%s  %s\n' "$sha256" "$archive" | sha256sum --check --strict
+          tar -xzf "$archive" -C "$RUNNER_TEMP" actionlint
+          "$RUNNER_TEMP/actionlint" -shellcheck= -pyflakes= \
+            .github/workflows/workflow-examples.yml \
+            examples/github-actions/check-after-deploy.yml
